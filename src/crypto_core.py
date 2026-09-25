@@ -1,6 +1,5 @@
 """
 crypto_core.py
-anjay
 ===============
 Modul inti untuk enkripsi dan dekripsi data (teks maupun berkas biner)
 memakai algoritma AEAD (Authenticated Encryption with Associated Data):
