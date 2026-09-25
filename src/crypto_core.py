@@ -31,7 +31,9 @@ digabung dalam urutan tetap:
 """
 
 import os
+import sys
 import base64
+import getpass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag
 
@@ -164,49 +166,183 @@ def decrypt_from_base64(teks_base64: str, password: str) -> bytes:
 
 
 # ---------------------------------------------------------------------
-# Blok tes manual cepat -- jalankan langsung: python src/crypto_core.py
+# Fungsi untuk berkas (file), sesuai fitur wajib "enkripsi teks maupun
+# berkas". Fungsi ini tinggal membaca/menulis bytes dari/ke disk lalu
+# memanggil encrypt()/decrypt() yang sama persis dengan yang dipakai
+# untuk teks -- karena bagi AES, teks dan berkas sama-sama cuma bytes.
 # ---------------------------------------------------------------------
+
+def encrypt_file(path_asal: str, path_tujuan: str, password: str,
+                  metode: int = METODE_AES_GCM) -> None:
+    """Membaca berkas apa pun, mengenkripsinya, menyimpan hasilnya."""
+    with open(path_asal, "rb") as f:
+        data_asli = f.read()
+
+    paket = encrypt(data_asli, password, metode)
+
+    with open(path_tujuan, "wb") as f:
+        f.write(paket)
+
+
+def decrypt_file(path_asal: str, path_tujuan: str, password: str) -> None:
+    """Membaca berkas terenkripsi, mendekripsinya, menyimpan hasilnya."""
+    with open(path_asal, "rb") as f:
+        paket = f.read()
+
+    data_asli = decrypt(paket, password)  # bisa lempar DekripsiGagalError
+
+    with open(path_tujuan, "wb") as f:
+        f.write(data_asli)
+
+
+# ---------------------------------------------------------------------
+# ANTARMUKA INTERAKTIF (CLI)
+# =========================
+# Bagian ini yang dijalankan saat Anda run "python src/crypto_core.py".
+# Berbeda dari versi sebelumnya, di sini SEMUA nilai (password, pesan,
+# pilihan algoritma) diminta langsung dari Anda lewat terminal, bukan
+# nilai contoh yang sudah ditulis di kode (hardcoded).
+# ---------------------------------------------------------------------
+
+def _pilih_metode_dari_input() -> int:
+    """Menanyakan ke user mau pakai algoritma yang mana."""
+    print("Pilih algoritma:")
+    print("  1. AES-256-GCM (default)")
+    print("  2. ChaCha20-Poly1305")
+    pilihan = input("Masukkan pilihan [1/2, kosongkan untuk default]: ").strip()
+    if pilihan == "2":
+        return METODE_CHACHA20
+    return METODE_AES_GCM
+
+
+def _input_password(prompt: str = "Masukkan password: ") -> str:
+    """
+    Meminta password tanpa menampilkannya di layar (memakai getpass).
+    Kalau terminal tidak mendukung getpass (misal dijalankan dari
+    beberapa IDE), otomatis jatuh ke input() biasa supaya tidak crash.
+    """
+    try:
+        return getpass.getpass(prompt)
+    except Exception:
+        print("(Peringatan: password akan terlihat di layar)")
+        return input(prompt)
+
+
+def menu_enkripsi_teks() -> None:
+    print("\n--- Enkripsi Teks ---")
+    pesan = input("Masukkan pesan yang mau dienkripsi: ")
+    password = _input_password("Buat password untuk enkripsi ini: ")
+    if password == "":
+        print("Password tidak boleh kosong. Dibatalkan.\n")
+        return
+
+    metode = _pilih_metode_dari_input()
+
+    hasil_base64 = encrypt_to_base64(pesan.encode("utf-8"), password, metode)
+
+    print(f"\nBerhasil dienkripsi dengan {_NAMA_METODE[metode]}.")
+    print("Cipherteks (Base64), simpan/salin ini untuk didekripsi nanti:")
+    print(hasil_base64)
+    print()
+
+
+def menu_dekripsi_teks() -> None:
+    print("\n--- Dekripsi Teks ---")
+    teks_base64 = input("Tempelkan cipherteks (Base64): ").strip()
+    password = _input_password("Masukkan password: ")
+
+    try:
+        hasil = decrypt_from_base64(teks_base64, password)
+        print("\nDekripsi berhasil. Pesan asli:")
+        print(hasil.decode("utf-8"))
+    except DekripsiGagalError as e:
+        print(f"\nGAGAL: {e}")
+    except Exception as e:
+        print(f"\nGAGAL: format cipherteks tidak valid ({e})")
+    print()
+
+
+def menu_enkripsi_file() -> None:
+    print("\n--- Enkripsi Berkas ---")
+    path_asal = input("Path berkas yang mau dienkripsi: ").strip()
+
+    if not os.path.isfile(path_asal):
+        print(f"Berkas tidak ditemukan: {path_asal}\n")
+        return
+
+    path_tujuan = input(
+        "Path untuk menyimpan hasil (contoh: rahasia.pdf.enc): "
+    ).strip()
+    password = _input_password("Buat password untuk enkripsi ini: ")
+    if password == "":
+        print("Password tidak boleh kosong. Dibatalkan.\n")
+        return
+
+    metode = _pilih_metode_dari_input()
+
+    try:
+        encrypt_file(path_asal, path_tujuan, password, metode)
+        ukuran = os.path.getsize(path_tujuan)
+        print(f"\nBerhasil. Berkas terenkripsi disimpan di: {path_tujuan}")
+        print(f"Ukuran berkas hasil: {ukuran} byte\n")
+    except Exception as e:
+        print(f"\nGAGAL mengenkripsi berkas: {e}\n")
+
+
+def menu_dekripsi_file() -> None:
+    print("\n--- Dekripsi Berkas ---")
+    path_asal = input("Path berkas terenkripsi (.enc): ").strip()
+
+    if not os.path.isfile(path_asal):
+        print(f"Berkas tidak ditemukan: {path_asal}\n")
+        return
+
+    path_tujuan = input("Path untuk menyimpan hasil dekripsi: ").strip()
+    password = _input_password("Masukkan password: ")
+
+    try:
+        decrypt_file(path_asal, path_tujuan, password)
+        print(f"\nBerhasil. Berkas hasil dekripsi disimpan di: {path_tujuan}\n")
+    except DekripsiGagalError as e:
+        print(f"\nGAGAL: {e}\n")
+    except Exception as e:
+        print(f"\nGAGAL: {e}\n")
+
+
+def tampilkan_menu() -> None:
+    print("=" * 50)
+    print("   APLIKASI ENKRIPSI - Keamanan Informasi")
+    print("=" * 50)
+    print("1. Enkripsi teks")
+    print("2. Dekripsi teks")
+    print("3. Enkripsi berkas")
+    print("4. Dekripsi berkas")
+    print("5. Keluar")
+
+
+def main() -> None:
+    aksi = {
+        "1": menu_enkripsi_teks,
+        "2": menu_dekripsi_teks,
+        "3": menu_enkripsi_file,
+        "4": menu_dekripsi_file,
+    }
+
+    while True:
+        tampilkan_menu()
+        pilihan = input("Pilih menu (1-5): ").strip()
+
+        if pilihan == "5":
+            print("Keluar dari aplikasi. Sampai jumpa!")
+            sys.exit(0)
+
+        fungsi = aksi.get(pilihan)
+        if fungsi is None:
+            print("Pilihan tidak dikenal, coba lagi.\n")
+            continue
+
+        fungsi()
+
+
 if __name__ == "__main__":
-    password_benar = "kataSandiSaya!2024"
-    password_salah = "kataSandiSalah"
-    pesan_asli = "Halo, ini pesan rahasia yang harus tetap aman.".encode("utf-8")
-
-    print("=== Uji dasar: enkripsi lalu dekripsi dengan password benar ===")
-    paket = encrypt(pesan_asli, password_benar, metode=METODE_AES_GCM)
-    print(f"Ukuran paket terenkripsi : {len(paket)} byte")
-    print(f"Metode dipakai           : {_NAMA_METODE[paket[0]]}")
-
-    hasil = decrypt(paket, password_benar)
-    assert hasil == pesan_asli
-    print(f"Dekripsi berhasil        : {hasil.decode('utf-8')}")
-
-    print("\n=== Uji tampilan Base64 ===")
-    teks_b64 = encrypt_to_base64(pesan_asli, password_benar)
-    print(f"Cipherteks (Base64)      : {teks_b64[:60]}...")
-    hasil_b64 = decrypt_from_base64(teks_b64, password_benar)
-    assert hasil_b64 == pesan_asli
-    print("Dekripsi dari Base64 berhasil.")
-
-    print("\n=== Uji penolakan: password salah ===")
-    try:
-        decrypt(paket, password_salah)
-        print("BUG: seharusnya gagal tapi malah berhasil!")
-    except DekripsiGagalError as e:
-        print(f"Ditolak dengan benar     : {e}")
-
-    print("\n=== Uji penolakan: cipherteks diubah 1 byte ===")
-    paket_rusak = bytearray(paket)
-    paket_rusak[-1] ^= 0xFF  # balik semua bit di byte terakhir
-    try:
-        decrypt(bytes(paket_rusak), password_benar)
-        print("BUG: seharusnya gagal tapi malah berhasil!")
-    except DekripsiGagalError as e:
-        print(f"Ditolak dengan benar     : {e}")
-
-    print("\n=== Uji algoritma kedua: ChaCha20-Poly1305 ===")
-    paket_chacha = encrypt(pesan_asli, password_benar, metode=METODE_CHACHA20)
-    hasil_chacha = decrypt(paket_chacha, password_benar)
-    assert hasil_chacha == pesan_asli
-    print(f"Dekripsi ChaCha20 berhasil: {hasil_chacha.decode('utf-8')}")
-
-    print("\nSemua uji manual berhasil dijalankan.")
+    main()
